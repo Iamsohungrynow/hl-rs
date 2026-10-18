@@ -249,11 +249,11 @@ pub struct PerpDex {
     pub name: String,
     pub full_name: String,
     pub deployer: String,
-    pub deployer_fee_scale: String,
+    pub deployer_fee_scale: Option<String>,
     pub fee_recipient: Option<String>,
     pub oracle_updater: Option<String>,
     pub asset_to_streaming_oi_cap: Vec<(String, String)>,
-    pub last_deployer_fee_scale_change_time: String,
+    pub last_deployer_fee_scale_change_time: Option<String>,
     // pub sub_deployers: Vec<Vec<String>>,
 }
 
@@ -284,7 +284,7 @@ pub struct PerpDeployAuctionStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::Meta;
+    use super::{Meta, PerpDex};
     use serde_json::json;
 
     #[test]
@@ -306,5 +306,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(meta.collateral_token, None);
+    }
+
+    #[test]
+    fn perp_dex_allows_missing_fee_scale_fields() {
+        let dex: PerpDex = serde_json::from_value(json!({
+            "name": "test",
+            "fullName": "Test Dex",
+            "deployer": "0x0000000000000000000000000000000000000000",
+            "feeRecipient": null,
+            "oracleUpdater": null,
+            "assetToStreamingOiCap": []
+        }))
+        .unwrap();
+
+        assert_eq!(dex.deployer_fee_scale, None);
+        assert_eq!(dex.last_deployer_fee_scale_change_time, None);
+    }
+
+    #[test]
+    fn perp_dex_preserves_fee_scale_fields_when_present() {
+        let dex: PerpDex = serde_json::from_value(json!({
+            "name": "test",
+            "fullName": "Test Dex",
+            "deployer": "0x0000000000000000000000000000000000000000",
+            "deployerFeeScale": "1.5",
+            "feeRecipient": null,
+            "oracleUpdater": null,
+            "assetToStreamingOiCap": [],
+            "lastDeployerFeeScaleChangeTime": "2026-01-01T00:00:00Z"
+        }))
+        .unwrap();
+
+        assert_eq!(dex.deployer_fee_scale.as_deref(), Some("1.5"));
+        assert_eq!(
+            dex.last_deployer_fee_scale_change_time.as_deref(),
+            Some("2026-01-01T00:00:00Z")
+        );
     }
 }
