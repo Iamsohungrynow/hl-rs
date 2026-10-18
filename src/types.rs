@@ -129,6 +129,7 @@ impl CoinToAsset {
 #[derive(Deserialize, Debug, Clone)]
 pub struct Meta {
     pub universe: Vec<AssetMeta>,
+    #[serde(rename = "collateralToken")]
     pub collateral_token: Option<u32>,
 }
 
@@ -279,4 +280,31 @@ pub struct PerpDeployAuctionStatus {
     pub start_gas: String,
     pub current_gas: Option<String>,
     pub end_gas: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Meta;
+    use serde_json::json;
+
+    #[test]
+    fn meta_deserializes_camel_case_collateral_token() {
+        let meta: Meta = serde_json::from_value(json!({
+            "universe": [],
+            "collateralToken": 0
+        }))
+        .unwrap();
+
+        assert_eq!(meta.collateral_token, Some(0));
+    }
+
+    #[test]
+    fn meta_allows_missing_collateral_token() {
+        let meta: Meta = serde_json::from_value(json!({
+            "universe": []
+        }))
+        .unwrap();
+
+        assert_eq!(meta.collateral_token, None);
+    }
 }
