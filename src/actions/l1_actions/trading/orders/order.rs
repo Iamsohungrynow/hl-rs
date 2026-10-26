@@ -66,15 +66,27 @@ pub enum Tif {
 }
 
 /// Trigger order type for stop-loss/take-profit.
+///
+/// **Field order is the wire format, not a style choice.** The L1 signing hash is taken over the
+/// msgpack of this struct and msgpack key order follows declaration order, so the server recomputes
+/// a different hash if these are declared in a different order than it expects — and the failure is
+/// not a rejected signature. It recovers a different address and answers "User or API Wallet 0x…
+/// does not exist", for an account nobody owns.
+///
+/// Python's `order_type_to_wire` builds the trigger dict as `isMarket`, `triggerPx`, `tpsl`, in that
+/// order, so that is the order here. Note it differs from the order in Python's own
+/// `TriggerOrderType` TypedDict, which is why reading the type rather than the wire builder gets
+/// this wrong.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct TriggerOrderType {
+    pub is_market: bool,
+    /// A normalized string, matching Python's `float_to_wire`.
     #[serde(
         serialize_with = "serialize_decimal_wire",
         deserialize_with = "deserialize_decimal_wire"
     )]
     pub trigger_px: Decimal,
-    pub is_market: bool,
     pub tpsl: TpSl,
 }
 
@@ -285,5 +297,75 @@ impl BatchOrder {
     pub fn with_builder(mut self, builder: BuilderInfo) -> Self {
         self.builder = Some(builder);
         self
+    }
+}
+
+#[cfg(test)]
+mod trigger_wire_order {
+    use rust_decimal::Decimal;
+
+    use super::{LimitOrderType, OrderType, TpSl, TriggerOrderType};
+
+    fn keys(v: &serde_json::Value) -> Vec<String> {
+        v.as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Pins the order Python's `order_type_to_wire` emits: `isMarket`, `triggerPx`, `tpsl`.
+    ///
+    /// This is the whole bug this module's doc comment describes. The hash is taken over msgpack
+    /// whose key order follows declaration order, so a field moving here produces a signature the
+    /// server cannot match — and it reports an unknown user rather than a bad signature, which is
+    /// why it cost a live debugging session to find.
+    #[test]
+    fn the_trigger_dict_is_is_market_then_trigger_px_then_tpsl() {
+        let t = OrderType::Trigger(TriggerOrderType {
+            is_market: false,
+            trigger_px: Decimal::new(50, 0),
+            tpsl: TpSl::Sl,
+        });
+        let v = serde_json::to_value(&t).unwrap();
+        assert_eq!(keys(&v), vec!["trigger"]);
+        assert_eq!(
+            keys(&v["trigger"]),
+            vec!["isMarket", "triggerPx", "tpsl"],
+            "must match Python's order_type_to_wire, not its TypedDict"
+        );
+    }
+
+    /// msgpack is what the hash actually covers, so assert the order there too rather than
+    /// trusting serde_json's object to preserve it.
+    #[test]
+    fn msgpack_carries_the_keys_in_that_same_order() {
+        let t = OrderType::Trigger(TriggerOrderType {
+            is_market: true,
+            trigger_px: Decimal::new(50, 0),
+            tpsl: TpSl::Tp,
+        });
+        let hex: String = rmp_serde::to_vec_named(&t)
+            .unwrap()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        let at =
+            |needle: &str| hex.find(needle).unwrap_or_else(|| panic!("missing {needle} in {hex}"));
+        // fixstr-prefixed keys: a8 "isMarket", a9 "triggerPx", a4 "tpsl".
+        let is_market = at("a869734d61726b6574");
+        let trigger_px = at("a9747269676765725078");
+        let tpsl = at("a47470736c");
+        assert!(is_market < trigger_px, "isMarket must precede triggerPx: {hex}");
+        assert!(trigger_px < tpsl, "triggerPx must precede tpsl: {hex}");
+    }
+
+    /// The limit arm is the control: it was never broken, and must stay that way.
+    #[test]
+    fn the_limit_arm_is_unchanged() {
+        let v = serde_json::to_value(OrderType::Limit(LimitOrderType::alo())).unwrap();
+        assert_eq!(keys(&v), vec!["limit"]);
+        assert_eq!(keys(&v["limit"]), vec!["tif"]);
+        assert_eq!(v["limit"]["tif"], serde_json::json!("Alo"));
     }
 }
