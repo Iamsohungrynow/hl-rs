@@ -296,6 +296,16 @@ where
     Ok(Signature::new(r, s, v != 0))
 }
 
+/// Serde guard for the cancel actions' `f` flag.
+///
+/// Hyperliquid rejects a cancel action hashed with `f: false`: the flag is either
+/// present and true, or absent entirely. Skipping on false keeps the signing hash
+/// byte-identical to a cancel carrying no flag at all, so adding the field cannot
+/// change an existing caller's `connectionId`.
+pub(crate) fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 pub(crate) fn ser_lowercase<S>(address: &Address, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
