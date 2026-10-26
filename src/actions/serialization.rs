@@ -654,9 +654,9 @@ mod tests {
 
     use super::*;
     use crate::actions::{
-        ActionKind, BatchCancel, BatchModify, CancelByCloid, CancelWire, LimitOrderType, OrderType,
-        OrderWire, PreparedAction, SetOpenInterestCaps, SignedActionKind, Tif, ToggleBigBlocks,
-        UsdSend,
+        ActionKind, BatchCancel, BatchModify, CancelByCloid, CancelWire, LimitOrderType,
+        ModifyWire, OrderTarget, OrderType, OrderWire, PreparedAction, SetOpenInterestCaps,
+        SignedActionKind, Tif, ToggleBigBlocks, UsdSend,
     };
     use crate::SigningChain;
 
@@ -690,6 +690,78 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].get("oid"), Some(&json!(91_490_942u64)));
         assert!(arr[0].get("order").is_some());
+    }
+
+    /// `oid` is a union, and widening it must not move the numeric form by a single byte.
+    ///
+    /// The signing hash is taken over the msgpack of this structure, so if `OrderTarget::Oid`
+    /// serialised as anything other than a bare integer — a tagged object, say — every existing
+    /// caller's signature would change and Hyperliquid would reject them all. The untagged
+    /// representation is what keeps it identical; this is the test that notices if that is ever lost.
+    #[test]
+    fn widening_oid_leaves_the_numeric_form_byte_identical() {
+        let order = OrderWire {
+            asset: 4,
+            is_buy: true,
+            limit_px: dec!(100.0),
+            size: dec!(0.01),
+            reduce_only: false,
+            order_type: OrderType::Limit(LimitOrderType { tif: Tif::Gtc }),
+            client_order_id: None,
+        };
+
+        // What a caller wrote before the change, and what it writes now.
+        let implicit = BatchModify::single(91_490_942u64, order.clone());
+        let explicit = BatchModify::new(vec![ModifyWire {
+            oid: OrderTarget::Oid(91_490_942),
+            order: order.clone(),
+        }]);
+
+        let a = rmp_serde::to_vec_named(&build_action_value(&implicit, None).unwrap()).unwrap();
+        let b = rmp_serde::to_vec_named(&build_action_value(&explicit, None).unwrap()).unwrap();
+        assert_eq!(a, b, "the two spellings must msgpack identically");
+
+        // And the bare integer really is bare: no tag, no wrapper object.
+        let v = build_action_value(&implicit, None).unwrap();
+        let oid = v["modifies"][0]["oid"].clone();
+        assert!(
+            oid.is_number(),
+            "a numeric oid must serialise as a number, not {oid:?}"
+        );
+    }
+
+    /// The cloid form, which is the point of the widening: a contract emitting an intent can only
+    /// ever know the cloid it chose, never the oid Hyperliquid assigned.
+    ///
+    /// Measured against the live API before being written: msgpacking this shape with a cloid string
+    /// in `oid` and signing the hash produced a signature Hyperliquid accepted, and it resolved the
+    /// order by that cloid.
+    #[test]
+    fn a_cloid_target_serialises_as_the_padded_hex_string() {
+        let order = OrderWire {
+            asset: 4,
+            is_buy: true,
+            limit_px: dec!(100.0),
+            size: dec!(0.01),
+            reduce_only: false,
+            order_type: OrderType::Limit(LimitOrderType { tif: Tif::Gtc }),
+            client_order_id: None,
+        };
+        let action = BatchModify::single_by_cloid(0xdead_beef, order);
+        let v = build_action_value(&action, None).expect("build_action_value");
+
+        assert_eq!(
+            v["modifies"][0]["oid"],
+            json!("0x000000000000000000000000deadbeef"),
+            "a cloid is 0x followed by exactly 32 hex characters, zero-padded"
+        );
+
+        // Round-trips, so a client reading a response back gets the same target.
+        let wire: ModifyWire = serde_json::from_value(v["modifies"][0].clone()).unwrap();
+        assert_eq!(
+            wire.oid,
+            OrderTarget::Cloid("0x000000000000000000000000deadbeef".into())
+        );
     }
 
     #[test]
