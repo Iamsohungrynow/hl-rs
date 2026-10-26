@@ -115,7 +115,7 @@ impl ExchangeClient {
 
     pub fn prepare_action<A: Action>(&self, action: A) -> Result<PreparedAction<A>, Error> {
         PreparedAction::new(
-            action,
+            self.ensure_action_nonce(action),
             self.base_url.get_signing_chain(),
             self.vault_address,
             self.expires_after,
