@@ -34,5 +34,8 @@ pub use sub_account_spot_transfer::SubAccountSpotTransfer;
 mod vault_transfer;
 pub use vault_transfer::VaultTransfer;
 
+mod borrow_lend;
+pub use borrow_lend::{BorrowLend, BorrowLendOperation};
+
 mod agent_enable_dex_abstraction;
 pub use agent_enable_dex_abstraction::AgentEnableDexAbstraction;
